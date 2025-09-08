@@ -1,5 +1,4 @@
-# Telco Customer Churn Prediction App
-
+# Customer Choas Prediction
 This is a **Streamlit web app** for predicting customer churn using a **CatBoost model**. Users can either input customer details manually or upload a CSV file to predict churn for multiple customers.
 
 ---
@@ -46,3 +45,4 @@ This is a **Streamlit web app** for predicting customer churn using a **CatBoost
 ## 📄 License
 
 This project is licensed under the MIT License.
+
