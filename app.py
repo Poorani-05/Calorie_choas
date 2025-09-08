@@ -26,11 +26,15 @@ with open("label_encoders_calorie.pkl", "rb") as f:
 with open("svm_best_model.pkl", "rb") as f:
     model = pickle.load(f)
 
+# ---------------- Show available categorical encoders ----------------
+st.write("Available categorical columns for input:", list(label_encoders.keys()))
+
 # ---------------- User input ----------------
 st.header("Enter Nutritional Details")
 
 def user_input_features():
     data = {}
+    # Numeric features
     data['Total Fat'] = st.number_input("Total Fat (g)", min_value=0.0)
     data['Saturated Fat'] = st.number_input("Saturated Fat (g)", min_value=0.0)
     data['Trans Fat'] = st.number_input("Trans Fat (g)", min_value=0.0)
@@ -40,26 +44,25 @@ def user_input_features():
     data['Dietary Fiber'] = st.number_input("Dietary Fiber (g)", min_value=0.0)
     data['Sugars'] = st.number_input("Sugars (g)", min_value=0.0)
     data['Protein'] = st.number_input("Protein (g)", min_value=0.0)
-    
-    data['Category'] = st.selectbox(
-        "Category",
-        options=list(label_encoders['Category'].classes_)
-    )
-    
-    data['Serving Size'] = st.selectbox(
-        "Serving Size",
-        options=list(label_encoders['Serving Size'].classes_)
-    )
-    
+
+    # Categorical features (only if they exist in label_encoders)
+    for col in ['Category', 'Serving Size']:
+        if col in label_encoders:
+            data[col] = st.selectbox(
+                col,
+                options=list(label_encoders[col].classes_)
+            )
+
     return pd.DataFrame([data])
 
 input_df = user_input_features()
 
 # ---------------- Preprocessing ----------------
-# Encode categorical columns
-for col in ['Category', 'Serving Size']:
-    le = label_encoders[col]
-    input_df[col] = le.transform(input_df[col])
+# Encode categorical columns if present
+for col in input_df.select_dtypes(include='object').columns:
+    if col in label_encoders:
+        le = label_encoders[col]
+        input_df[col] = le.transform(input_df[col])
 
 # Scale numeric columns
 input_df[numeric_cols] = scaler.transform(input_df[numeric_cols])
