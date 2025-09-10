@@ -1,136 +1,116 @@
 # app.py
 import streamlit as st
 import pandas as pd
-import pickle
-import altair as alt
-from io import BytesIO
-from fpdf import FPDF
+import numpy as np
+import joblib
+from sklearn.preprocessing import StandardScaler
+from fpdf import FPDF  # for PDF report generation
 
-# ---------------- Page Config ----------------
+# -------------------- PAGE CONFIG --------------------
 st.set_page_config(
-    page_title="🥗 Calorie Churn Prediction",
-    page_icon="🍽️",
-    layout="wide"
+    page_title="🥗 Calorie Category Prediction",
+    page_icon="🥗",
+    layout="centered"
 )
 
-# ---------------- Header ----------------
-st.markdown("""
-    <div style='text-align:center'>
-        <h1 style='color:#2E86AB'>🥗 Calorie Churn Prediction Dashboard</h1>
-        <p>Predict the calorie category of food items using nutritional info</p>
-    </div>
-""", unsafe_allow_html=True)
+# -------------------- LOAD ASSETS --------------------
+@st.cache_resource
+def load_assets():
+    try:
+        model = joblib.load("svm_best_model.pkl")
+        scaler = joblib.load("scaler_calorie.pkl")
+        label_encoders = joblib.load("label_encoders_calorie.pkl")
+        return model, scaler, label_encoders
+    except FileNotFoundError as e:
+        st.error(f"❌ Required file not found: {e}")
+        st.stop()
 
-# ---------------- Load model and preprocessing ----------------
-with open("scaler_calorie.pkl", "rb") as f:
-    scaler_data = pickle.load(f)
-    scaler = scaler_data["scaler"]
-    numeric_cols = scaler_data["numeric_cols"]
+model, scaler, label_encoders = load_assets()
 
-with open("label_encoders_calorie.pkl", "rb") as f:
-    label_encoders = pickle.load(f)
+# Define columns
+numeric_cols = [
+    "Total Fat", "Saturated Fat", "Trans Fat", "Cholesterol",
+    "Sodium", "Carbohydrates", "Dietary Fiber", "Sugars", "Protein"
+]
+categorical_cols = ["Category"]
 
-with open("svm_best_model.pkl", "rb") as f:
-    model = pickle.load(f)
+# -------------------- PDF REPORT GENERATION --------------------
+def generate_pdf(input_data, prediction, probabilities):
+    pdf = FPDF()
+    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.add_page()
+    pdf.set_font("Arial", size=12)
 
-# ---------------- Sidebar for Inputs ----------------
-st.sidebar.header("Enter Nutritional Details")
+    pdf.cell(200, 10, txt="🥗 Calorie Category Prediction Report", ln=True, align="C")
+    pdf.ln(10)
 
-def sidebar_input():
-    data = {}
+    pdf.cell(200, 10, txt="📋 Input Details:", ln=True)
+    for key, value in input_data.items():
+        pdf.cell(200, 10, txt=f"{key}: {value}", ln=True)
+
+    pdf.ln(5)
+    pdf.cell(200, 10, txt=f"🔍 Predicted Category: {prediction}", ln=True)
+
+    pdf.ln(5)
+    pdf.cell(200, 10, txt="📊 Prediction Probabilities:", ln=True)
+    for cat, prob in probabilities.items():
+        pdf.cell(200, 10, txt=f"{cat}: {prob:.2f}", ln=True)
+
+    pdf.output("calorie_prediction_report.pdf")
+    return "calorie_prediction_report.pdf"
+
+# -------------------- USER INPUT FORM --------------------
+def user_input_form():
+    st.subheader("📥 Enter Nutritional Details")
+
+    input_data = {}
     for col in numeric_cols:
-        data[col] = st.sidebar.slider(col, 0.0, 500.0, 10.0, step=1.0)
-    for col in label_encoders.keys():
-        data[col] = st.sidebar.selectbox(col, options=list(label_encoders[col].classes_))
-    return pd.DataFrame([data])
+        input_data[col] = st.number_input(f"{col} (g or mg)", min_value=0.0, step=0.1)
 
-input_df = sidebar_input()
+    input_data["Category"] = st.selectbox("Category", label_encoders["Category"].classes_)
+    return pd.DataFrame([input_data])
 
-# Encode categorical and scale numeric
-for col in input_df.select_dtypes(include='object').columns:
-    input_df[col] = label_encoders[col].transform(input_df[col])
-input_df[numeric_cols] = scaler.transform(input_df[numeric_cols])
+# -------------------- MAIN APP --------------------
+st.title("🥗 Calorie Category Prediction App")
+st.write("Predict the calorie category of food items based on nutritional information.")
 
-# ---------------- Main Layout with Tabs ----------------
-tab1, tab2 = st.tabs(["Single Prediction", "Batch Prediction"])
+input_df = user_input_form()
 
-# ---------------- Single Prediction ----------------
-with tab1:
-    if st.button("Predict Calorie Category", key="single"):
-        pred = model.predict(input_df)[0]
-        pred_proba = model.predict_proba(input_df)[0]
-        
-        # Prediction Card
-        st.markdown(f"""
-            <div style="background-color:#D1F2EB; padding:15px; border-radius:10px">
-                <h2 style='color:#117A65'>Predicted Category: {pred}</h2>
-            </div>
-        """, unsafe_allow_html=True)
-        
-        # Probability Chart
-        prob_df = pd.DataFrame({'Category': model.classes_, 'Probability': pred_proba})
-        chart = alt.Chart(prob_df).mark_bar().encode(
-            x='Category',
-            y='Probability',
-            color='Category',
-            tooltip=['Category', 'Probability']
-        ).properties(height=300)
-        st.altair_chart(chart, use_container_width=True)
-        
-        # PDF Report
-        pdf_btn = st.button("Download PDF Report", key="pdf")
-        if pdf_btn:
-            pdf = FPDF()
-            pdf.add_page()
-            pdf.set_font("Arial", "B", 16)
-            pdf.cell(0, 10, "Calorie Churn Prediction Report", ln=True, align="C")
-            pdf.ln(10)
-            pdf.set_font("Arial", "", 12)
-            for col in numeric_cols:
-                pdf.cell(0, 8, f"{col}: {input_df[col].values[0]:.2f}", ln=True)
-            for col in label_encoders.keys():
-                pdf.cell(0, 8, f"{col}: {list(label_encoders[col].classes_)[input_df[col].values[0]]}", ln=True)
-            pdf.ln(5)
-            pdf.cell(0, 8, f"Predicted Category: {pred}", ln=True)
-            
-            pdf_buffer = BytesIO()
-            pdf.output(pdf_buffer)
-            pdf_buffer.seek(0)
-            
-            st.download_button(
-                "Download PDF",
-                data=pdf_buffer,
-                file_name="calorie_prediction_report.pdf",
-                mime="application/pdf"
-            )
-
-# ---------------- Batch Prediction ----------------
-with tab2:
-    uploaded_file = st.file_uploader("Upload CSV for Batch Prediction", type=["csv"])
-    if uploaded_file is not None:
-        batch_df = pd.read_csv(uploaded_file)
-        st.success("CSV loaded successfully!")
-        
+# -------------------- PREDICTION --------------------
+if st.button("🔮 Predict"):
+    try:
         # Encode categorical
-        for col in batch_df.select_dtypes(include='object').columns:
-            if col in label_encoders:
-                batch_df[col] = label_encoders[col].transform(batch_df[col])
-        
-        # Scale numeric
-        batch_df[numeric_cols] = scaler.transform(batch_df[numeric_cols])
-        
-        # Predict
-        batch_pred = model.predict(batch_df)
-        batch_df['Predicted Category'] = batch_pred
-        
-        st.dataframe(batch_df)
-        
-        st.download_button(
-            label="Download Predictions CSV",
-            data=batch_df.to_csv(index=False).encode('utf-8'),
-            file_name="batch_predictions.csv",
-            mime="text/csv"
-        )
+        for col in categorical_cols:
+            le = label_encoders[col]
+            input_df[col] = le.transform(input_df[col])
 
+        # Scale numeric
+        input_df[numeric_cols] = scaler.transform(input_df[numeric_cols])
+
+        # Prediction
+        prediction = model.predict(input_df)[0]
+        probabilities = model.predict_proba(input_df)[0]
+
+        # Decode label
+        prediction_label = label_encoders["Calories_cat"].inverse_transform([prediction])[0]
+        prob_dict = dict(zip(label_encoders["Calories_cat"].classes_, probabilities))
+
+        st.success(f"✅ Predicted Category: **{prediction_label}**")
+        st.write("📊 Prediction Probabilities:")
+        st.dataframe(pd.DataFrame(prob_dict.items(), columns=["Category", "Probability"]))
+
+        # PDF Download
+        pdf_path = generate_pdf(
+            {col: input_df[col].values[0] for col in input_df.columns},
+            prediction_label,
+            prob_dict
+        )
+        with open(pdf_path, "rb") as f:
+            st.download_button("📄 Download PDF Report", f, file_name=pdf_path)
+
+    except Exception as e:
+        st.error(f"⚠️ An error occurred: {str(e)}")
+
+# -------------------- FOOTER --------------------
 st.markdown("---")
-st.markdown("<center>Made with ❤️ using Streamlit, scikit-learn, and SVM</center>", unsafe_allow_html=True)
+st.markdown("🚀 Built with ❤️ using Streamlit, Scikit-Learn, and FPDF2")
