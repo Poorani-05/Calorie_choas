@@ -1,80 +1,99 @@
 # app.py
 import streamlit as st
 import pandas as pd
-import pickle
+import numpy as np
+import joblib
+import os
+import matplotlib.pyplot as plt
+import seaborn as sns
+from fpdf import FPDF
 
-# ---------------- Page configuration ----------------
-st.set_page_config(
-    page_title="Calorie Churn Prediction",
-    page_icon="🥗",
-    layout="centered"
-)
-
-st.title("🥗 Calorie Churn Prediction App")
-st.write("Predict the calorie category of food items based on nutritional information.")
+# ---------------- Helper function to load pickle files safely ----------------
+def load_pickle(file_name):
+    if not os.path.exists(file_name):
+        st.error(f"❌ File `{file_name}` not found. Make sure it is uploaded to your repo.")
+        st.stop()
+    return joblib.load(file_name)
 
 # ---------------- Load preprocessing tools and model ----------------
-with open("scaler_calorie.pkl", "rb") as f:
-    scaler_data = pickle.load(f)
-    scaler = scaler_data["scaler"]
-    numeric_cols = scaler_data["numeric_cols"]
+scaler_data = load_pickle("scaler_calorie.pkl")
+label_encoders = load_pickle("label_encoders_calorie.pkl")
+model = load_pickle("svm_best_model.pkl")
 
-with open("label_encoders_calorie.pkl", "rb") as f:
-    label_encoders = pickle.load(f)
+scaler = scaler_data["scaler"]
+numeric_cols = scaler_data["numeric_cols"]
 
-with open("svm_best_model.pkl", "rb") as f:
-    model = pickle.load(f)
+# ---------------- Streamlit App ----------------
+st.set_page_config(page_title="🥗 Calorie Churn Prediction", page_icon="🍴", layout="wide")
 
-# ---------------- User input ----------------
-st.header("Enter Nutritional Details")
+st.title("🥗 Calorie Churn Prediction App")
+st.markdown("Predict the **calorie category** of food items based on nutritional information.")
 
+# Sidebar input
+st.sidebar.header("📊 Enter Nutritional Details")
 def user_input_features():
     data = {}
-    # Numeric features
-    numeric_features = [
-        'Total Fat', 'Saturated Fat', 'Trans Fat', 'Cholesterol', 
-        'Sodium', 'Carbohydrates', 'Dietary Fiber', 'Sugars', 'Protein'
-    ]
-    for col in numeric_features:
-        data[col] = st.number_input(f"{col}", min_value=0.0)
+    for col in numeric_cols:
+        data[col] = st.sidebar.number_input(f"{col}", min_value=0.0, step=0.1)
 
-    # Categorical features
-    categorical_features = ['Category', 'Serving Size']
-    for col in categorical_features:
-        if col in label_encoders:
-            data[col] = st.selectbox(col, options=list(label_encoders[col].classes_))
-
+    # Handle categorical inputs
+    for col in label_encoders.keys():
+        data[col] = st.sidebar.selectbox(f"{col}", options=list(label_encoders[col].classes_))
     return pd.DataFrame([data])
 
 input_df = user_input_features()
 
 # ---------------- Preprocessing ----------------
-# Encode categorical columns
-for col in input_df.select_dtypes(include='object').columns:
-    if col in label_encoders:
-        le = label_encoders[col]
-        input_df[col] = le.transform(input_df[col])
+input_encoded = input_df.copy()
 
-# Ensure all numeric columns expected by scaler exist
-for col in numeric_cols:
-    if col not in input_df.columns:
-        input_df[col] = 0.0  # default value
+# Encode categorical features
+for col, le in label_encoders.items():
+    if col in input_encoded.columns:
+        input_encoded[col] = le.transform([input_encoded[col][0]])
 
-# Reorder columns to match the scaler
-other_cols = [col for col in input_df.columns if col not in numeric_cols]
-input_df = input_df[numeric_cols + other_cols]
-
-# Scale numeric columns
-input_df[numeric_cols] = scaler.transform(input_df[numeric_cols])
+# Scale numeric features
+numeric_cols_in_input = [col for col in numeric_cols if col in input_encoded.columns]
+input_encoded[numeric_cols_in_input] = scaler.transform(input_encoded[numeric_cols_in_input])
 
 # ---------------- Prediction ----------------
-if st.button("Predict Calorie Category"):
-    prediction = model.predict(input_df)[0]
-    prediction_proba = model.predict_proba(input_df)[0]
+prediction = model.predict(input_encoded)[0]
+prediction_proba = model.predict_proba(input_encoded)[0]
 
-    st.subheader("Prediction Results")
-    st.write(f"**Predicted Category:** {prediction}")
-    
-    st.write("**Prediction Probabilities:**")
-    prob_df = pd.DataFrame([prediction_proba], columns=model.classes_)
-    st.dataframe(prob_df.T.rename(columns={0: "Probability"}))
+# Decode prediction if it's encoded
+if "Calories_cat" in label_encoders:
+    prediction = label_encoders["Calories_cat"].inverse_transform([prediction])[0]
+
+# ---------------- Results ----------------
+st.subheader("🔮 Prediction Results")
+st.write(f"**Predicted Category:** {prediction}")
+
+# Probability chart
+proba_df = pd.DataFrame({
+    "Category": label_encoders["Calories_cat"].classes_,
+    "Probability": prediction_proba
+})
+
+fig, ax = plt.subplots(figsize=(6, 4))
+sns.barplot(x="Category", y="Probability", data=proba_df, ax=ax, palette="viridis")
+plt.title("Prediction Probabilities")
+st.pyplot(fig)
+
+# ---------------- Generate PDF Report ----------------
+if st.button("📄 Generate Report"):
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("Arial", "B", 16)
+    pdf.cell(200, 10, "Calorie Churn Prediction Report", ln=True, align="C")
+
+    pdf.set_font("Arial", "", 12)
+    pdf.cell(200, 10, f"Predicted Category: {prediction}", ln=True)
+    pdf.cell(200, 10, "Prediction Probabilities:", ln=True)
+
+    for i, row in proba_df.iterrows():
+        pdf.cell(200, 10, f"{row['Category']}: {row['Probability']:.2f}", ln=True)
+
+    pdf.output("calorie_prediction_report.pdf")
+    with open("calorie_prediction_report.pdf", "rb") as f:
+        st.download_button("⬇️ Download Report", f, file_name="calorie_prediction_report.pdf")
+
+st.success("✅ App is running successfully!")
